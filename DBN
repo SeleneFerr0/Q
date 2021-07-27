@@ -1,0 +1,107 @@
+
+import pandas as pd
+import jpype    # pip install jpype1    (version 1.2.1 or later)
+import jpype.imports
+from jpype.types import *
+from jpype import java, JImplements, JOverride
+
+classpath = "C:\\Program Files\\Bayes Server\\Bayes Server 9.4\\API\\Java\\bayesserver-9.4.jar"
+
+# Launch the JVM
+jpype.startJVM(classpath=[classpath])
+
+import data_frame_utils as dfu
+
+# import the Java modules
+from com.bayesserver import *
+from com.bayesserver.inference import *
+from com.bayesserver.data import *
+from com.bayesserver.learning.parameters import *
+
+# Uncomment the following line and change the license key, if you are using a licensed version
+# License.validate("xxx")
+
+
+@JImplements(ParameterLearningProgress)
+class ConsoleParameterLearningProgress(object):
+
+    @JOverride
+    def update(self, info):
+        """
+        See ParameterLearningProgress in the Bayes Server .NET or Java API docs for details.
+        """
+        print('Iterations: ', info.getIterationCount(), ', log-likelihood: ', info.getLogLikelihood())
+
+    @JOverride
+    def getDistributionMonitoring(self):
+        """
+        See ParameterLearningProgress in the Bayes Server .NET or Java API docs for details.
+        """
+        return DistributionMonitoring.NONE
+
+
+def create_network_structure():
+
+    network = Network()
+
+    x1 = Variable('X1', VariableValueType.CONTINUOUS)
+    x2 = Variable('X2', VariableValueType.CONTINUOUS)
+
+    # add a temporal (time series) node, with two continuous variables
+    node_x = Node("X", [x1, x2])
+    node_x.setTemporalType(TemporalType.TEMPORAL)
+
+    network.getNodes().add(node_x)
+
+    # add temporal links
+    for order in range(1, 4):
+        network.getLinks().add(Link(node_x, node_x, order))
+
+    # at this point the Dynamic Bayesian network structure is fully specified
+
+    return network
+
+
+def learn_parameters():
+
+    # we manually construct the network here, but it could be loaded from a file
+
+    network = create_network_structure()
+
+    x1 = network.getVariables().get("X1")
+    x2 = network.getVariables().get("X2")
+
+
+    learning = ParameterLearning(network, RelevanceTreeInferenceFactory())
+    learning_options = ParameterLearningOptions()
+    learning_options.setTimeSeriesMode(TimeSeriesMode.ROLLING)
+    progress = ConsoleParameterLearningProgress()
+    learning_options.setProgress(progress)
+
+    df = pd.read_csv('data/time_series_tutorial.csv')  #  Note: Saved as csv from the Tutorial data installed with Bayes Server
+    dt = dfu.to_data_table(df)
+    temporal_data_reader_command = DataTableDataReaderCommand(dt)
+
+    temporal_reader_options = TemporalReaderOptions('Case', 'Time', TimeValueType.INDEX)
+
+    # here we map variables to database columns
+    # in this case the variables and database columns have the same name
+    temporal_variable_references = [
+                        VariableReference(x1, ColumnValueType.VALUE, x1.getName()),
+                        VariableReference(x2, ColumnValueType.VALUE, x2.getName())
+                ]
+
+    # note that although this example only has temporal data
+    # we could have included additional non temporal variables and data
+
+    evidence_reader_command = DefaultEvidenceReaderCommand(
+                temporal_data_reader_command,
+                java.util.Arrays.asList(temporal_variable_references),
+                temporal_reader_options)
+
+    result = learning.learn(evidence_reader_command, learning_options)
+
+    print("Log likelihood = ", result.getLogLikelihood())
+
+
+learn_parameters()
